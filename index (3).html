@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 바깥으로는 공개 환율 조회만 허용합니다. 입력한 값은 어디로도 보내지 않습니다. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://open.er-api.com https://api.frankfurter.dev https://cdn.jsdelivr.net; base-uri 'none'; form-action 'none'">
+<title>달러 환전 계산기</title>
+<style>
+  :root {
+    --bg: #F4F6F9;
+    --surface: #FFFFFF;
+    --ink: #17233A;
+    --muted: #5E6B80;
+    --rule: #DCE2EA;
+    --rule-strong: #1E4F95;
+    --band: #1E4F95;
+    --band-ink: #FFFFFF;
+    --accent: #1E5BB8;
+    --accent-soft: #EAF1FB;
+    --chart-fill: rgba(30, 91, 184, 0.10);
+    --warn: #B5462A;
+    color-scheme: light;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F1522;
+      --surface: #161E2E;
+      --ink: #E4EAF4;
+      --muted: #97A3B8;
+      --rule: #29344A;
+      --rule-strong: #5E8FD8;
+      --band: #142B52;
+      --band-ink: #E4EAF4;
+      --accent: #7EAAF0;
+      --accent-soft: #1B2A45;
+      --chart-fill: rgba(126, 170, 240, 0.14);
+      --warn: #F0A285;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1522; --surface: #161E2E; --ink: #E4EAF4; --muted: #97A3B8; --rule: #29344A;
+    --rule-strong: #5E8FD8; --band: #142B52; --band-ink: #E4EAF4; --accent: #7EAAF0;
+    --accent-soft: #1B2A45; --chart-fill: rgba(126, 170, 240, 0.14); --warn: #F0A285; color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+    line-height: 1.55;
+    -webkit-text-size-adjust: 100%;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* 위쪽 띠 */
+  .band { background: var(--band); color: var(--band-ink); }
+  .band-inner {
+    max-width: 800px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .band h1 { font-size: 1.1rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .band p { margin: 0; font-size: 0.85rem; opacity: 0.85; }
+
+  main { max-width: 800px; margin: 0 auto; padding: 28px 24px 40px; }
+
+  /* 환전될 원화 */
+  .result { padding: 8px 0 24px; border-bottom: 2px solid var(--rule-strong); }
+  .result .label { margin: 0; color: var(--muted); }
+  .krw { margin: 2px 0 0; font-size: clamp(2.5rem, 9vw, 4rem); font-weight: 700; line-height: 1.12; letter-spacing: -0.02em; }
+  .krw .unit { font-size: 0.42em; font-weight: 500; color: var(--muted); margin-left: 0.12em; }
+  .formula { margin: 6px 0 0; color: var(--muted); }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+  .msg { font-size: 0.85rem; color: var(--accent); }
+
+  button {
+    font: inherit; font-size: 0.95rem; min-height: 44px; padding: 9px 18px;
+    border-radius: 4px; cursor: pointer; white-space: nowrap;
+    background: var(--accent); color: #FFFFFF; border: 1px solid var(--accent);
+  }
+  button.line { background: var(--surface); color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  /* 입력 */
+  .inputs {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-bottom: 1px solid var(--rule); background: var(--surface);
+  }
+  .field { padding: 16px 18px; border-right: 1px solid var(--rule); }
+  .field:last-child { border-right: 0; }
+  .field label { display: block; font-size: 0.88rem; color: var(--muted); margin-bottom: 2px; }
+  .input-wrap { display: flex; align-items: baseline; gap: 6px; border-bottom: 2px solid var(--rule); }
+  .input-wrap:focus-within { border-bottom-color: var(--accent); }
+  .input-wrap input {
+    flex: 1; min-width: 0; width: 100%; font: inherit; font-size: 1.3rem; font-variant-numeric: tabular-nums;
+    color: var(--ink); background: transparent; border: 0; padding: 4px 0 6px; text-align: right;
+  }
+  .input-wrap input:focus { outline: none; }
+  .input-wrap .suffix { color: var(--muted); font-size: 0.95rem; }
+  .hint { margin: 6px 0 0; font-size: 0.8rem; color: var(--muted); }
+
+  /* 환율 내역 표 */
+  section.block { margin-top: 32px; }
+  .block-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .block-head h2 { font-size: 1.05rem; margin: 0; font-weight: 700; }
+  .block-head .meta { font-size: 0.85rem; color: var(--muted); margin: 0; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-top: 2px solid var(--rule-strong); }
+  th, td { padding: 13px 16px; border-bottom: 1px solid var(--rule); text-align: left; }
+  th { font-weight: 500; color: var(--muted); font-size: 0.88rem; background: var(--bg); }
+  td.rate { text-align: right; font-variant-numeric: tabular-nums; font-size: 1.05rem; white-space: nowrap; }
+  td.how { color: var(--muted); font-size: 0.85rem; }
+  tr.applied td { background: var(--accent-soft); }
+  tr.applied td:first-child, tr.applied td.rate { font-weight: 700; color: var(--accent); }
+
+  .refresh-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .status { font-size: 0.85rem; color: var(--muted); }
+  .status.error { color: var(--warn); }
+  .manual { display: none; gap: 12px; align-items: flex-end; margin-top: 12px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--rule); }
+  .manual.show { display: flex; }
+  .manual .field { padding: 0; border: 0; flex: 1; }
+
+  /* 차트 */
+  .chart-wrap { position: relative; background: var(--surface); border-top: 2px solid var(--rule-strong); border-bottom: 1px solid var(--rule); padding: 14px 8px 6px; }
+  #chart { display: block; width: 100%; height: 280px; touch-action: none; }
+  #chart .grid { stroke: var(--rule); stroke-width: 1; }
+  #chart .axis { fill: var(--muted); font-size: 11px; font-family: inherit; font-variant-numeric: tabular-nums; }
+  #chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  #chart .area { fill: var(--chart-fill); stroke: none; }
+  #chart .dot { fill: var(--accent); }
+  #chart .cursor { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  #chart .cursor-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); font-size: 0.92rem; pointer-events: none; }
+  .tip {
+    position: absolute; display: none; pointer-events: none; white-space: nowrap;
+    background: var(--ink); color: var(--surface); font-size: 0.82rem; font-variant-numeric: tabular-nums;
+    padding: 5px 9px; border-radius: 4px; transform: translate(-50%, -115%);
+  }
+
+  .note { margin-top: 28px; font-size: 0.8rem; color: var(--muted); max-width: 72ch; }
+
+  @media (max-width: 600px) {
+    .band-inner { padding: 12px 16px; }
+    main { padding: 20px 16px 32px; }
+    .inputs { grid-template-columns: minmax(0, 1fr); }
+    .field { border-right: 0; border-bottom: 1px solid var(--rule); padding: 14px 14px; }
+    .field:last-child { border-bottom: 0; }
+    .actions button { flex: 1; }
+    .refresh-row button { width: 100%; }
+    .manual { flex-direction: column; align-items: stretch; }
+    th, td { padding: 12px 10px; }
+    td.how { display: none; }
+    th.how { display: none; }
+    #chart { height: 220px; }
+  }
+</style>
+</head>
+<body>
+<header class="band">
+  <div class="band-inner">
+    <h1>달러 환전 계산기</h1>
+    <p>현찰 파실 때 · 우대율 반영</p>
+  </div>
+</header>
+
+<main>
+  <section class="result" aria-live="polite">
+    <p class="label">환전될 원화</p>
+    <p class="krw num" id="krw">–<span class="unit">원</span></p>
+    <p class="formula num" id="formula">소지 달러를 입력하세요</p>
+    <div class="actions">
+      <button type="button" class="line" id="exampleBtn">예시 채우기</button>
+      <button type="button" id="copyBtn">결과 복사</button>
+      <span class="msg" id="copyMsg" role="status"></span>
+    </div>
+  </section>
+
+  <div class="inputs">
+    <div class="field">
+      <label for="usd">소지 달러</label>
+      <div class="input-wrap"><input id="usd" type="text" inputmode="decimal" autocomplete="off" placeholder="0"><span class="suffix">USD</span></div>
+    </div>
+    <div class="field">
+      <label for="pref">우대율</label>
+      <div class="input-wrap"><input id="pref" type="text" inputmode="decimal" autocomplete="off" placeholder="100"><span class="suffix">%</span></div>
+    </div>
+    <div class="field">
+      <label for="spread">파실 때 스프레드</label>
+      <div class="input-wrap"><input id="spread" type="text" inputmode="decimal" autocomplete="off" placeholder="예: 1.75"><span class="suffix">%</span></div>
+      <p class="hint">은행 환율표의 현찰 ‘파실 때 스프레드’ 값</p>
+    </div>
+  </div>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>환율 내역</h2>
+      <p class="meta num" id="asof">기준일시 –</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>구분</th><th style="text-align:right">원/달러</th><th class="how">계산</th></tr></thead>
+        <tbody>
+          <tr><td>매매기준율</td><td class="rate" id="baseCell">–</td><td class="how" id="baseHow">자동 조회</td></tr>
+          <tr><td>현찰 파실 때</td><td class="rate" id="cashCell">–</td><td class="how" id="cashHow">스프레드 반영</td></tr>
+          <tr class="applied"><td>적용 환율</td><td class="rate" id="appliedCell">–</td><td class="how" id="appliedHow">우대율 반영</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="refresh-row">
+      <button type="button" class="line" id="refresh">환율 새로 고침</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="manual" id="manual">
+      <div class="field">
+        <label for="manualRate">매매기준율 직접 입력</label>
+        <div class="input-wrap"><input id="manualRate" type="text" inputmode="decimal" autocomplete="off" placeholder="예: 1,342.60"><span class="suffix">원</span></div>
+      </div>
+      <button type="button" id="manualBtn">이 환율로 계산</button>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>적용 환율 (10분 간격)</h2>
+      <p class="meta num" id="chartMeta"></p>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <svg id="chart" role="img" aria-label="시간별 적용 환율 차트"></svg>
+      <div class="empty" id="empty"></div>
+      <div class="tip" id="tip"></div>
+    </div>
+  </section>
+
+  <p class="note">입력한 값은 이 브라우저 안에서만 계산하고 저장하며, 어디로도 보내지 않습니다. 바깥으로 나가는 요청은 공개 환율 조회뿐입니다. 매매기준율은 무료 공개 시장 환율로 대신하므로 은행 고시 환율과 몇 원 다를 수 있고, 한 시간에서 하루 단위로 갱신됩니다. 탭을 열어 두면 10분마다 기록하며, PC를 끄거나 탭을 닫은 동안의 구간은 선이 끊깁니다. 기록은 최근 3일치만 남기고 자동으로 지웁니다. 이 계산은 참고용입니다.</p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var INTERVAL = 10 * 60 * 1000;
+  var KEEP = 3 * 24 * 60 * 60 * 1000;
+  var GAP = INTERVAL * 1.5;
+  var STORE_KEY = "fx-calc-v1";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var el = {
+    usd: $("usd"), pref: $("pref"), spread: $("spread"),
+    krw: $("krw"), formula: $("formula"), copyMsg: $("copyMsg"),
+    asof: $("asof"), baseCell: $("baseCell"), baseHow: $("baseHow"),
+    cashCell: $("cashCell"), cashHow: $("cashHow"), appliedCell: $("appliedCell"), appliedHow: $("appliedHow"),
+    refresh: $("refresh"), status: $("status"), manual: $("manual"), manualRate: $("manualRate"),
+    chart: $("chart"), empty: $("empty"), tip: $("tip"), chartMeta: $("chartMeta"), wrap: $("chartWrap")
+  };
+
+  // 저장: 입력 세 개, 기록(매매기준율), 마지막으로 받은 환율
+  var store = { usd: "", pref: "100", spread: "", history: [], last: null };
+  var override = null;   // { rate, label } 직접 입력 또는 예시 환율. 기록에는 넣지 않음
+  var lastAttempt = 0, fetching = false;
+
+  // ---------- 숫자 ----------
+  function parseNum(s) {
+    var t = String(s == null ? "" : s)
+      .replace(/[\uFF10-\uFF19]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 48); })
+      .replace(/\uFF0E/g, ".")
+      .replace(/[^0-9.]/g, "");
+    var n = parseFloat(t);
+    return isFinite(n) ? n : NaN;
+  }
+  function fmt(n, d) { return n.toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  function round2(n) { return Math.round(n * 100 + 1e-9) / 100; }
+  function stamp(t) {
+    var d = new Date(t), p = function (x) { return String(x).padStart(2, "0"); };
+    return d.getFullYear() + "." + p(d.getMonth() + 1) + "." + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function hm(t) { var d = new Date(t); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+  function md(t) { var d = new Date(t); return (d.getMonth() + 1) + "/" + d.getDate() + " " + hm(t); }
+
+  // ---------- 계산 ----------
+  // 현찰 파실 때 = 매매기준율 × (1 − 스프레드%)
+  // 적용 환율   = 현찰 파실 때 + (매매기준율 − 현찰 파실 때) × 우대율
+  //             = 매매기준율 − 매매기준율 × 스프레드% × (1 − 우대율)
+  function settings() {
+    var pref = parseNum(el.pref.value), spread = parseNum(el.spread.value);
+    return {
+      pref: isFinite(pref) ? Math.min(pref, 100) : NaN,
+      spread: isFinite(spread) ? spread : NaN
+    };
+  }
+  function calc(base, s) {
+    if (!isFinite(base) || !isFinite(s.pref)) return null;
+    var cash = isFinite(s.spread) ? round2(base * (1 - s.spread / 100)) : null;
+    var applied;
+    if (s.pref >= 100) applied = round2(base);                   // 100% 우대 = 매매기준율
+    else if (cash !== null) applied = round2(cash + (base - cash) * s.pref / 100);
+    else applied = null;                                          // 스프레드가 없으면 계산 불가
+    return { base: base, cash: cash, applied: applied };
+  }
+
+  function currentBase() {
+    if (override) return override.rate;
+    return store.last ? store.last.rate : NaN;
+  }
+
+  function render() {
+    var s = settings();
+    var base = currentBase();
+    var c = calc(base, s);
+    var usd = parseNum(el.usd.value);
+
+    // 환율 표
+    el.baseCell.textContent = isFinite(base) ? fmt(base, 2) : "–";
+    el.baseHow.textContent = override ? override.label : (store.last ? (store.last.source + " 자동 조회") : "자동 조회");
+    el.asof.textContent = override ? "기준일시 " + (override.label) :
+      (store.last ? "기준일시 " + stamp(store.last.t) + (store.last.asof ? " (" + store.last.asof + ")" : "") : "기준일시 –");
+    el.cashCell.textContent = c && c.cash !== null ? fmt(c.cash, 2) : "–";
+    el.cashHow.textContent = isFinite(s.spread) ? "스프레드 " + s.spread + "% 반영" : "스프레드를 입력하세요";
+    el.appliedCell.textContent = c && c.applied !== null ? fmt(c.applied, 2) : "–";
+    el.appliedHow.textContent = isFinite(s.pref) ? "우대율 " + s.pref + "% 반영" : "우대율을 입력하세요";
+
+    // 환전될 원화
+    var ok = c && c.applied !== null && isFinite(usd) && usd > 0;
+    if (ok) {
+      var krw = Math.floor(usd * c.applied + 1e-6);
+      el.krw.innerHTML = fmt(krw, 0) + '<span class="unit">원</span>';
+      el.formula.textContent = fmt(usd, 2).replace(/\.00$/, "") + "달러 × " + fmt(c.applied, 2) + "원";
+      document.title = fmt(krw, 0) + "원 · 달러 환전 계산기";
+    } else {
+      el.krw.innerHTML = '–<span class="unit">원</span>';
+      el.formula.textContent =
+        !isFinite(base) ? "환율을 불러오면 계산됩니다" :
+        !(isFinite(usd) && usd > 0) ? (el.usd.value.trim() ? "소지 달러를 숫자로 입력하세요 (예: 1000)" : "소지 달러를 입력하세요") :
+        !isFinite(s.pref) ? "우대율을 입력하세요" :
+        "우대율이 100%보다 낮으면 파실 때 스프레드가 필요합니다";
+      document.title = "달러 환전 계산기";
+    }
+    return { ok: ok, c: c, usd: usd };
+  }
+
+  // ---------- 저장 ----------
+  function prune() {
+    var cut = Date.now() - KEEP;
+    store.history = store.history.filter(function (p) { return p && isFinite(p.t) && isFinite(p.r) && p.t >= cut; });
+  }
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        var d = JSON.parse(raw);
+        ["usd", "pref", "spread"].forEach(function (k) { if (typeof d[k] === "string") store[k] = d[k]; });
+        if (Array.isArray(d.history)) store.history = d.history;
+        if (d.last && isFinite(d.last.rate)) store.last = d.last;
+      }
+    } catch (e) { /* 저장소를 못 쓰면 매번 새로 시작 */ }
+    prune();
+    el.usd.value = store.usd; el.pref.value = store.pref; el.spread.value = store.spread;
+  }
+  function save() {
+    prune();
+    store.usd = el.usd.value; store.pref = el.pref.value; store.spread = el.spread.value;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) { /* 무시 */ }
+  }
+
+  // ---------- 매매기준율 불러오기 ----------
+  var sources = [
+    { name: "ExchangeRate-API", url: "https://open.er-api.com/v6/latest/USD",
+      parse: function (j) { return { rate: j.rates && j.rates.KRW, asof: j.time_last_update_unix ? "시세 " + stamp(j.time_last_update_unix * 1000) : "" }; } },
+    { name: "Frankfurter", url: "https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW",
+      parse: function (j) { return { rate: j.rates && j.rates.KRW, asof: j.date ? "시세 " + j.date : "" }; } },
+    { name: "currency-api", url: "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
+      parse: function (j) { return { rate: j.usd && j.usd.krw, asof: j.date ? "시세 " + j.date : "" }; } }
+  ];
+  function getJSON(url) {
+    var ctrl = new AbortController(), timer = setTimeout(function () { ctrl.abort(); }, 8000);
+    return fetch(url, { signal: ctrl.signal, cache: "no-store" }).then(function (r) {
+      clearTimeout(timer); if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
+    });
+  }
+  function fetchAndRecord() {
+    if (fetching) return;
+    fetching = true; lastAttempt = Date.now();
+    el.refresh.disabled = true;
+    el.status.classList.remove("error");
+    el.status.textContent = "불러오는 중…";
+    var i = 0;
+    function next() {
+      if (i >= sources.length) return Promise.reject(new Error("all failed"));
+      var s = sources[i++];
+      return getJSON(s.url).then(function (j) {
+        var r = s.parse(j);
+        if (!r.rate || !isFinite(r.rate)) throw new Error("no rate");
+        return { rate: round2(r.rate), asof: r.asof, source: s.name };
+      }).catch(next);
+    }
+    next().then(function (r) {
+      var now = Date.now();
+      store.last = { rate: r.rate, asof: r.asof, source: r.source, t: now };
+      store.history.push({ t: now, r: r.rate });
+      override = null;
+      el.manual.classList.remove("show");
+      save();
+      el.status.textContent = "확인 " + hm(now) + " · 다음 기록 " + hm(now + INTERVAL);
+    }).catch(function () {
+      el.status.classList.add("error");
+      el.status.textContent = "환율을 불러오지 못했습니다. 인터넷 연결을 확인하거나 아래에 매매기준율을 직접 입력하세요. 10분 뒤 다시 시도합니다.";
+      el.manual.classList.add("show");
+    }).then(function () {
+      fetching = false; el.refresh.disabled = false;
+      render(); drawChart();
+    });
+  }
+  function tick() { if (Date.now() - lastAttempt >= INTERVAL) fetchAndRecord(); }
+
+  // ---------- 차트 ----------
+  var NS = "http://www.w3.org/2000/svg", geom = null;
+  function svgEl(n, a, p) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; }
+  function niceStep(range, count) {
+    var raw = range / count, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+    return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+  }
+  function drawChart() {
+    var svg = el.chart;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    el.tip.style.display = "none"; geom = null;
+    var W = svg.clientWidth || 600, H = svg.clientHeight || 280;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+
+    var s = settings();
+    var pts = store.history.slice().sort(function (a, b) { return a.t - b.t; }).map(function (p) {
+      var c = calc(p.r, s); return { t: p.t, base: p.r, v: c ? c.applied : null };
+    }).filter(function (p) { return p.v !== null; });
+
+    var reason = !store.history.length ? "아직 기록이 없습니다. 탭을 열어 두면 10분마다 점이 추가됩니다."
+      : !isFinite(s.pref) ? "우대율을 입력하면 적용 환율 차트가 그려집니다."
+      : "우대율이 100%보다 낮으면 파실 때 스프레드를 입력해야 차트가 그려집니다.";
+    el.empty.textContent = pts.length ? "" : reason;
+    el.empty.style.display = pts.length ? "none" : "flex";
+    if (!pts.length) { el.chartMeta.textContent = ""; return; }
+
+    var pad = { l: 58, r: 14, t: 14, b: 30 };
+    var tMax = Math.max(Date.now(), pts[pts.length - 1].t);
+    var tMin = Math.min(pts[0].t, tMax - 60 * 60 * 1000);
+    var lo = Infinity, hi = -Infinity;
+    pts.forEach(function (p) { if (p.v < lo) lo = p.v; if (p.v > hi) hi = p.v; });
+    if (hi - lo < 1) { var m = (hi + lo) / 2; lo = m - 1; hi = m + 1; }
+    var step = niceStep(hi - lo, 4), yLo = Math.floor(lo / step) * step, yHi = Math.ceil(hi / step) * step;
+    var dec = step < 1 ? (step < 0.1 ? 2 : 1) : 0;
+    var x = function (t) { return pad.l + (t - tMin) / (tMax - tMin) * (W - pad.l - pad.r); };
+    var y = function (v) { return pad.t + (yHi - v) / (yHi - yLo) * (H - pad.t - pad.b); };
+
+    for (var v = yLo; v <= yHi + step / 2; v += step) {
+      svgEl("line", { x1: pad.l, x2: W - pad.r, y1: y(v), y2: y(v), "class": "grid" }, svg);
+      svgEl("text", { x: pad.l - 8, y: y(v) + 4, "text-anchor": "end", "class": "axis" }, svg).textContent = fmt(v, dec);
+    }
+    var span = tMax - tMin, showDate = span > 20 * 60 * 60 * 1000, nX = W < 420 ? 3 : 5;
+    for (var k = 0; k <= nX; k++) {
+      var tt = tMin + span * k / nX;
+      svgEl("text", { x: x(tt), y: H - 8, "text-anchor": k === 0 ? "start" : k === nX ? "end" : "middle", "class": "axis" }, svg)
+        .textContent = showDate ? md(tt) : hm(tt);
+    }
+
+    // 구간별로 나눠 면과 선 그리기 (15분 넘게 비면 끊김)
+    var segs = [], cur = [];
+    pts.forEach(function (p, i) {
+      if (i > 0 && p.t - pts[i - 1].t > GAP) { segs.push(cur); cur = []; }
+      cur.push(p);
+    });
+    segs.push(cur);
+    var base = H - pad.b;
+    segs.forEach(function (seg) {
+      if (seg.length === 1) { svgEl("circle", { cx: x(seg[0].t), cy: y(seg[0].v), r: 3, "class": "dot" }, svg); return; }
+      var line = seg.map(function (p, i) { return (i ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.v).toFixed(1); }).join(" ");
+      svgEl("path", { d: line + " L" + x(seg[seg.length - 1].t).toFixed(1) + " " + base + " L" + x(seg[0].t).toFixed(1) + " " + base + " Z", "class": "area" }, svg);
+      svgEl("path", { d: line, "class": "line" }, svg);
+    });
+
+    var cursor = svgEl("line", { y1: pad.t, y2: base, "class": "cursor", visibility: "hidden" }, svg);
+    var cdot = svgEl("circle", { r: 4.5, "class": "cursor-dot", visibility: "hidden" }, svg);
+    geom = { pts: pts, x: x, y: y, cursor: cursor, cdot: cdot, W: W };
+
+    var diff = pts[pts.length - 1].v - pts[0].v;
+    el.chartMeta.textContent = "기록 " + pts.length + "개 · " + md(pts[0].t) + " 대비 " + (diff >= 0 ? "+" : "") + fmt(diff, 2) + "원";
+  }
+  function showPoint(clientX) {
+    if (!geom) return;
+    var rect = el.chart.getBoundingClientRect(), px = (clientX - rect.left) * (geom.W / rect.width);
+    var best = null, bd = Infinity;
+    geom.pts.forEach(function (p) { var d = Math.abs(geom.x(p.t) - px); if (d < bd) { bd = d; best = p; } });
+    if (!best) return;
+    var cx = geom.x(best.t), cy = geom.y(best.v), sc = rect.width / geom.W, wr = el.wrap.getBoundingClientRect();
+    geom.cursor.setAttribute("x1", cx); geom.cursor.setAttribute("x2", cx); geom.cursor.setAttribute("visibility", "visible");
+    geom.cdot.setAttribute("cx", cx); geom.cdot.setAttribute("cy", cy); geom.cdot.setAttribute("visibility", "visible");
+    el.tip.textContent = md(best.t) + "  적용 " + fmt(best.v, 2) + "원 (기준 " + fmt(best.base, 2) + ")";
+    el.tip.style.display = "block";
+    var left = rect.left - wr.left + cx * sc, half = el.tip.offsetWidth / 2;
+    el.tip.style.left = Math.max(half + 4, Math.min(wr.width - half - 4, left)) + "px";
+    el.tip.style.top = (rect.top - wr.top + cy * sc - 6) + "px";
+  }
+  function hidePoint() {
+    el.tip.style.display = "none";
+    if (geom) { geom.cursor.setAttribute("visibility", "hidden"); geom.cdot.setAttribute("visibility", "hidden"); }
+  }
+
+  // ---------- 복사 ----------
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(function () { return fallbackCopy(text); });
+    }
+    return fallbackCopy(text);
+  }
+  function fallbackCopy(text) {
+    return new Promise(function (res, rej) {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta); ok ? res() : rej(new Error("copy failed"));
+    });
+  }
+  var msgTimer;
+  function flash(t) { el.copyMsg.textContent = t; clearTimeout(msgTimer); msgTimer = setTimeout(function () { el.copyMsg.textContent = ""; }, 3000); }
+
+  // ---------- 이벤트 ----------
+  [el.usd, el.pref, el.spread].forEach(function (input) {
+    input.addEventListener("input", function () { save(); render(); if (input !== el.usd) drawChart(); });
+  });
+  el.refresh.addEventListener("click", fetchAndRecord);
+  $("manualBtn").addEventListener("click", function () {
+    var r = parseNum(el.manualRate.value);
+    if (!isFinite(r) || r <= 0) { el.manualRate.focus(); return; }
+    override = { rate: round2(r), label: "직접 입력" };
+    el.status.classList.remove("error");
+    el.status.textContent = "직접 입력한 매매기준율로 계산 중입니다. 다음 자동 조회가 성공하면 시장 환율로 돌아갑니다.";
+    render();
+  });
+  // 예시 채우기: 1,000달러 · 우대율 100% · 예시 매매기준율 1,400원 → 1,400,000원 (스프레드는 그대로 둠)
+  $("exampleBtn").addEventListener("click", function () {
+    el.usd.value = "1,000";
+    el.pref.value = "100";
+    save();
+    override = { rate: 1400, label: "예시 환율" };
+    el.status.classList.remove("error");
+    el.status.textContent = "예시를 채웠습니다. 환율 새로 고침을 누르면 실제 환율로 돌아갑니다.";
+    render(); drawChart();
+  });
+  $("copyBtn").addEventListener("click", function () {
+    var r = render();
+    if (!r.ok) { flash("복사할 결과가 없습니다."); return; }
+    var krw = Math.floor(r.usd * r.c.applied + 1e-6);
+    var basis = override ? override.label : "기준일시 " + stamp(store.last.t) + ", " + store.last.source;
+    var text = el.formula.textContent + " = " + fmt(krw, 0) + "원 (우대율 " + settings().pref + "%, " + basis + ")";
+    copyText(text).then(function () { flash("복사했습니다"); }, function () { flash("복사하지 못했습니다. 결과를 길게 눌러 직접 복사하세요."); });
+  });
+  el.chart.addEventListener("pointermove", function (e) { showPoint(e.clientX); });
+  el.chart.addEventListener("pointerdown", function (e) { showPoint(e.clientX); });
+  el.chart.addEventListener("pointerleave", hidePoint);
+  var rz; window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(drawChart, 150); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { tick(); drawChart(); } });
+
+  // ---------- 시작 ----------
+  load(); render(); drawChart();
+  fetchAndRecord();
+  setInterval(tick, 30 * 1000);
+})();
+</script>
+</body>
+</html>
